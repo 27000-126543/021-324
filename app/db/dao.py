@@ -304,9 +304,9 @@ class CostItemDAO:
         cursor = conn.cursor()
         now = _now()
         cursor.execute('''
-            INSERT INTO cost_items (event_id, cost_category, item_name, unit_price, quantity, unit, remark, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (data['event_id'], data['cost_category'], data['item_name'],
+            INSERT INTO cost_items (event_id, version_id, cost_category, item_name, unit_price, quantity, unit, remark, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (data['event_id'], data.get('version_id'), data['cost_category'], data['item_name'],
               data.get('unit_price', 0), data.get('quantity', 0), data.get('unit', ''),
               data.get('remark', ''), now, now))
         conn.commit()
@@ -320,19 +320,29 @@ class CostItemDAO:
         cursor = conn.cursor()
         now = _now()
         cursor.execute('''
-            UPDATE cost_items SET cost_category=?, item_name=?, unit_price=?, quantity=?, unit=?, remark=?, updated_at=?
+            UPDATE cost_items SET version_id=?, cost_category=?, item_name=?, unit_price=?, quantity=?, unit=?, remark=?, updated_at=?
             WHERE id=?
-        ''', (data['cost_category'], data['item_name'], data.get('unit_price', 0),
+        ''', (data.get('version_id'), data['cost_category'], data['item_name'], data.get('unit_price', 0),
               data.get('quantity', 0), data.get('unit', ''), data.get('remark', ''), now, cid))
         conn.commit()
         conn.close()
 
     @staticmethod
-    def get_by_event(event_id):
+    def get_by_event(event_id, version_id=None):
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM cost_items WHERE event_id=? ORDER BY cost_category, id', (event_id,))
-        rows = cursor.fetchall()
+        if version_id:
+            cursor.execute('SELECT * FROM cost_items WHERE event_id=? AND version_id=? ORDER BY cost_category, id',
+                           (event_id, version_id))
+            rows = cursor.fetchall()
+        else:
+            cursor.execute('SELECT * FROM cost_items WHERE event_id=? AND (version_id IS NULL OR version_id IN (SELECT id FROM cost_versions WHERE event_id=? AND is_current=1)) ORDER BY cost_category, id',
+                           (event_id, event_id))
+            rows = cursor.fetchall()
+            if not rows:
+                cursor.execute('SELECT * FROM cost_items WHERE event_id=? AND version_id IS NULL ORDER BY cost_category, id',
+                               (event_id,))
+                rows = cursor.fetchall()
         conn.close()
         return [dict(r) for r in rows]
 
@@ -345,8 +355,8 @@ class CostItemDAO:
         conn.close()
 
     @staticmethod
-    def get_summary(event_id):
-        items = CostItemDAO.get_by_event(event_id)
+    def get_summary(event_id, version_id=None):
+        items = CostItemDAO.get_by_event(event_id, version_id)
         result = {cat: [] for cat in CostItemDAO.CATEGORIES}
         totals = {cat: 0.0 for cat in CostItemDAO.CATEGORIES}
         for item in items:
@@ -358,6 +368,74 @@ class CostItemDAO:
                 totals[cat] += amount
         grand_total = sum(totals.values())
         return result, totals, grand_total
+
+
+class CostVersionDAO:
+    @staticmethod
+    def create_version(event_id, version_name, version_desc=''):
+        conn = get_connection()
+        cursor = conn.cursor()
+        now = _now()
+        cursor.execute('UPDATE cost_versions SET is_current=0 WHERE event_id=?', (event_id,))
+        cursor.execute('''
+            INSERT INTO cost_versions (event_id, version_name, version_desc, is_current, created_at)
+            VALUES (?, ?, ?, 1, ?)
+        ''', (event_id, version_name, version_desc, now))
+        vid = cursor.lastrowid
+        existing_items = CostItemDAO.get_by_event(event_id, version_id=None)
+        for it in existing_items:
+            cursor.execute('''
+                INSERT INTO cost_items (event_id, version_id, cost_category, item_name, unit_price, quantity, unit, remark, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (event_id, vid, it['cost_category'], it['item_name'],
+                  it['unit_price'], it['quantity'], it.get('unit', ''),
+                  it.get('remark', ''), now, now))
+        conn.commit()
+        conn.close()
+        return vid
+
+    @staticmethod
+    def get_versions(event_id):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM cost_versions WHERE event_id=? ORDER BY id DESC', (event_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_current_version(event_id):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM cost_versions WHERE event_id=? AND is_current=1 ORDER BY id DESC LIMIT 1', (event_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    @staticmethod
+    def set_current_version(event_id, version_id):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE cost_versions SET is_current=0 WHERE event_id=?', (event_id,))
+        cursor.execute('UPDATE cost_versions SET is_current=1 WHERE id=? AND event_id=?', (version_id, event_id))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def delete_version(version_id):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM cost_items WHERE version_id=?', (version_id,))
+        cursor.execute('DELETE FROM cost_versions WHERE id=?', (version_id,))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def compare_versions(event_id, version_id1, version_id2):
+        _, t1, g1 = CostItemDAO.get_summary(event_id, version_id1)
+        _, t2, g2 = CostItemDAO.get_summary(event_id, version_id2)
+        diff = {cat: t2[cat] - t1[cat] for cat in CostItemDAO.CATEGORIES}
+        return g2 - g1, diff, g1, g2
 
 
 class DocumentDAO:

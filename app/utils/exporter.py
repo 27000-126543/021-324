@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import QFileDialog
 from app.db.dao import CostItemDAO, EventDAO, DocumentDAO
 
 
-def export_summary(event_id):
+def export_summary(event_id, version_id=None):
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
@@ -63,7 +63,21 @@ def export_summary(event_id):
 
     row += 1
 
-    items_by_cat, totals, grand = CostItemDAO.get_summary(event_id)
+    ver_name = ''
+    if version_id:
+        from app.db.dao import CostVersionDAO
+        for v in CostVersionDAO.get_versions(event_id):
+            if v['id'] == version_id:
+                ver_name = v.get('version_name', '')
+                ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+                c = ws.cell(row=row, column=1, value=f'测算版本：{ver_name}' + ('（当前版本）' if v.get('is_current') else ''))
+                c.font = header_font
+                for col in range(1, 8):
+                    ws.cell(row=row, column=col).border = border
+                row += 1
+                break
+
+    items_by_cat, totals, grand = CostItemDAO.get_summary(event_id, version_id)
     for cat in CostItemDAO.CATEGORIES:
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         c = ws.cell(row=row, column=1, value=f'【{cat}】')

@@ -1,7 +1,8 @@
+from collections import defaultdict
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
                              QTableWidgetItem, QHeaderView, QMessageBox, QLabel, QSplitter,
                              QTextEdit, QGroupBox, QComboBox, QDateEdit, QLineEdit, QCheckBox,
-                             QFormLayout)
+                             QFormLayout, QStackedWidget, QScrollArea, QGridLayout)
 from PyQt5.QtCore import Qt, QDate
 from PyQt5.QtGui import QColor
 from app.db.dao import EventDAO, DocumentDAO
@@ -10,6 +11,174 @@ from app.ui.dialogs.photo_dialog import PhotoDialog
 from app.ui.dialogs.machinery_dialog import MachineryDialog
 from app.ui.dialogs.labor_dialog import LaborDialog
 from app.ui.dialogs.document_dialog import DocumentDialog
+
+
+MIN_DATE = QDate(2000, 1, 1)
+
+
+class EventCard(QWidget):
+    def __init__(self, event_data, missing_docs, parent_widget=None):
+        super().__init__()
+        self.event_id = event_data['id']
+        self.parent_widget = parent_widget
+        self._build_ui(event_data, missing_docs)
+
+    def _build_ui(self, ev, missing):
+        self.setStyleSheet('QWidget { background: #fff; border: 1px solid #ddd; border-radius: 6px; }'
+                          'QWidget:hover { border-color: #3498db; }')
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+
+        header = QHBoxLayout()
+        typelbl = QLabel(f"【{ev.get('event_type', '')}】")
+        typelbl.setStyleSheet('font-weight: bold; color: #2980b9;')
+        title = QLabel(f"{ev.get('start_date', '')}  {ev.get('affected_area', '')}")
+        title.setStyleSheet('font-weight: bold;')
+        header.addWidget(typelbl)
+        header.addWidget(title, 1)
+
+        if missing:
+            status = QLabel(f'✘ 缺{len(missing)}项')
+            status.setStyleSheet('color: #c0392b; font-weight: bold;')
+        else:
+            status = QLabel('✔ 资料齐全')
+            status.setStyleSheet('color: #27ae60; font-weight: bold;')
+        header.addWidget(status)
+        layout.addLayout(header)
+
+        sub = QLabel(f"{ev.get('contract_section', '')} | {ev.get('responsible_party', '')}")
+        sub.setStyleSheet('color: #7f8c8d; font-size: 9pt;')
+        layout.addWidget(sub)
+
+        if missing:
+            misslbl = QLabel('待补：' + '、'.join(missing[:4]))
+            misslbl.setStyleSheet('color: #c0392b; font-size: 9pt;')
+            misslbl.setWordWrap(True)
+            layout.addWidget(misslbl)
+
+        btnrow = QHBoxLayout()
+        btn_doc = QPushButton('📁 档案')
+        btn_photo = QPushButton('📷 照片')
+        btn_mach = QPushButton('⚙ 机械')
+        btn_labor = QPushButton('👷 劳务')
+        btn_edit = QPushButton('✏ 编辑')
+        for b in [btn_doc, btn_photo, btn_mach, btn_labor, btn_edit]:
+            b.setStyleSheet('QPushButton { padding: 2px 8px; font-size: 9pt; }')
+            b.setCursor(Qt.PointingHandCursor)
+        btn_doc.clicked.connect(self._open_doc)
+        btn_photo.clicked.connect(self._open_photo)
+        btn_mach.clicked.connect(self._open_machine)
+        btn_labor.clicked.connect(self._open_labor)
+        btn_edit.clicked.connect(self._edit)
+        btnrow.addWidget(btn_doc)
+        btnrow.addWidget(btn_photo)
+        btnrow.addWidget(btn_mach)
+        btnrow.addWidget(btn_labor)
+        btnrow.addWidget(btn_edit)
+        btnrow.addStretch(1)
+        layout.addLayout(btnrow)
+
+    def _refresh(self):
+        if self.parent_widget:
+            self.parent_widget.refresh()
+
+    def _open_doc(self):
+        DocumentDialog(self, event_id=self.event_id).exec_()
+        self._refresh()
+
+    def _open_photo(self):
+        PhotoDialog(self, event_id=self.event_id).exec_()
+        self._refresh()
+
+    def _open_machine(self):
+        MachineryDialog(self, event_id=self.event_id).exec_()
+        self._refresh()
+
+    def _open_labor(self):
+        LaborDialog(self, event_id=self.event_id).exec_()
+        self._refresh()
+
+    def _edit(self):
+        dlg = EventDialog(self, event_id=self.event_id)
+        if dlg.exec_():
+            self._refresh()
+
+
+class MonthGroup(QGroupBox):
+    def __init__(self, month, events_data, parent_widget=None):
+        super().__init__()
+        self.parent_widget = parent_widget
+        self.events = events_data
+        self._build_ui(month)
+
+    def _build_ui(self, month):
+        total = len(self.events)
+        complete = sum(1 for e in self.events if not e['_missing'])
+        missing_count = total - complete
+
+        self.setTitle(f'{month}  |  共 {total} 个事件  |  ✔ 齐全 {complete}  |  ✘ 待补 {missing_count}')
+        self.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #bbb; border-radius: 8px; margin-top: 12px; padding-top: 10px; }'
+                          'QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }')
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+
+        if missing_count > 0:
+            self.setStyleSheet(self.styleSheet().replace('#bbb', '#e67e22'))
+            self.setTitle(f'{month}  |  共 {total} 个事件  |  ✔ 齐全 {complete}  |  ✘ 待补 {missing_count}  ⚠ 需要整理')
+        else:
+            self.setStyleSheet(self.styleSheet().replace('#bbb', '#27ae60'))
+            self.setTitle(f'{month}  |  共 {total} 个事件  |  ✔ 齐全 {complete}  |  ✔ 已归档完成')
+
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        for i, ev in enumerate(self.events):
+            card = EventCard(ev, ev['_missing'], self.parent_widget)
+            row, col = divmod(i, 2)
+            grid.addWidget(card, row, col)
+        layout.addLayout(grid)
+
+
+class MonthlyView(QWidget):
+    def __init__(self, parent_widget=None):
+        super().__init__()
+        self.parent_widget = parent_widget
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.content = QWidget()
+        self.scroll.setWidget(self.content)
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.addStretch(1)
+        layout.addWidget(self.scroll)
+
+    def set_events(self, filtered_events):
+        while self.content_layout.count() > 0:
+            item = self.content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        by_month = defaultdict(list)
+        for ev in filtered_events:
+            missing = EventDAO.get_missing_docs(ev['id'])
+            ev['_missing'] = missing
+            month = ev['start_date'][:7] if ev.get('start_date') else '未知月份'
+            by_month[month].append(ev)
+
+        sorted_months = sorted(by_month.keys(), reverse=True)
+        for month in sorted_months:
+            group = MonthGroup(month, by_month[month], self.parent_widget)
+            self.content_layout.insertWidget(self.content_layout.count() - 1, group)
+
+        if not filtered_events:
+            lbl = QLabel('无符合筛选条件的事件')
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet('color: #999; padding: 40px;')
+            self.content_layout.insertWidget(0, lbl)
 
 
 class EventLedgerWidget(QWidget):
@@ -25,6 +194,10 @@ class EventLedgerWidget(QWidget):
         flayout = QFormLayout(filter_group)
         frow1 = QHBoxLayout()
 
+        self.cmb_view = QComboBox()
+        self.cmb_view.addItems(['📋 事件列表', '📅 月度资料包'])
+        self.cmb_view.currentIndexChanged.connect(self._switch_view)
+
         self.cmb_type = QComboBox()
         self.cmb_type.addItems(['全部', '停工', '窝工', '间歇施工'])
         self.cmb_type.currentIndexChanged.connect(self._on_filter_changed)
@@ -39,22 +212,27 @@ class EventLedgerWidget(QWidget):
         self.cmb_resp.addItems(['全部', '业主', '监理', '设计', '施工方', '第三方', '待确认'])
         self.cmb_resp.currentIndexChanged.connect(self._on_filter_changed)
 
+        self.chk_date_enable = QCheckBox('启用日期筛选')
+        self.chk_date_enable.stateChanged.connect(self._toggle_date_filter)
+
         self.date_from = QDateEdit()
         self.date_from.setCalendarPopup(True)
         self.date_from.setDisplayFormat('yyyy-MM-dd')
-        self.date_from.setDate(QDate.currentDate().addMonths(-3))
-        self.date_from.setSpecialValueText(' ')
+        self.date_from.setSpecialValueText('不限')
+        self.date_from.setMinimumDate(MIN_DATE)
+        self.date_from.setDate(MIN_DATE)
         self.date_from.dateChanged.connect(self._on_filter_changed)
 
         self.date_to = QDateEdit()
         self.date_to.setCalendarPopup(True)
         self.date_to.setDisplayFormat('yyyy-MM-dd')
-        self.date_to.setDate(QDate.currentDate())
-        self.date_to.setSpecialValueText(' ')
+        self.date_to.setSpecialValueText('不限')
+        self.date_to.setMinimumDate(MIN_DATE)
+        self.date_to.setDate(MIN_DATE)
         self.date_to.dateChanged.connect(self._on_filter_changed)
 
         self.txt_keyword = QLineEdit()
-        self.txt_keyword.setPlaceholderText('关键字搜索（部位/描述/通知号）')
+        self.txt_keyword.setPlaceholderText('关键字搜索')
         self.txt_keyword.textChanged.connect(self._on_filter_changed)
 
         self.chk_missing = QCheckBox('仅看待补资料事件')
@@ -63,13 +241,16 @@ class EventLedgerWidget(QWidget):
         self.btn_reset_filter = QPushButton('重置筛选')
         self.btn_reset_filter.clicked.connect(self._reset_filter)
 
+        frow1.addWidget(QLabel('视图：'))
+        frow1.addWidget(self.cmb_view)
+        frow1.addSpacing(15)
         frow1.addWidget(QLabel('事件类型：'))
         frow1.addWidget(self.cmb_type)
         frow1.addWidget(QLabel('合同段：'))
         frow1.addWidget(self.cmb_contract, 1)
         frow1.addWidget(QLabel('责任方：'))
         frow1.addWidget(self.cmb_resp)
-        frow1.addWidget(QLabel('开始日期：'))
+        frow1.addWidget(self.chk_date_enable)
         frow1.addWidget(self.date_from)
         frow1.addWidget(QLabel('至：'))
         frow1.addWidget(self.date_to)
@@ -78,6 +259,9 @@ class EventLedgerWidget(QWidget):
         frow1.addWidget(self.btn_reset_filter)
         flayout.addRow(frow1)
         layout.addWidget(filter_group)
+
+        self.date_from.setEnabled(False)
+        self.date_to.setEnabled(False)
 
         btn_bar = QHBoxLayout()
         self.btn_add = QPushButton('新增事件')
@@ -106,7 +290,10 @@ class EventLedgerWidget(QWidget):
         btn_bar.addWidget(self.lbl_count)
         layout.addLayout(btn_bar)
 
-        splitter = QSplitter(Qt.Vertical)
+        self.stack = QStackedWidget()
+
+        list_page = QWidget()
+        lsplitter = QSplitter(Qt.Vertical)
 
         self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels([
@@ -118,7 +305,7 @@ class EventLedgerWidget(QWidget):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setColumnHidden(0, True)
         self.table.itemSelectionChanged.connect(self._update_detail)
-        splitter.addWidget(self.table)
+        lsplitter.addWidget(self.table)
 
         detail_group = QGroupBox('事件详情 / 支撑材料档案')
         dlayout = QVBoxLayout(detail_group)
@@ -139,14 +326,42 @@ class EventLedgerWidget(QWidget):
         self.lbl_alert = QLabel('支撑材料提醒：请选择事件查看')
         self.lbl_alert.setStyleSheet('color:#c0392b; font-weight:bold; padding:4px;')
         dlayout.addWidget(self.lbl_alert)
-        splitter.addWidget(detail_group)
+        lsplitter.addWidget(detail_group)
+        lsplitter.setStretchFactor(0, 3)
+        lsplitter.setStretchFactor(1, 2)
 
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        layout.addWidget(splitter, 1)
+        llayout = QVBoxLayout(list_page)
+        llayout.addWidget(lsplitter)
+        self.stack.addWidget(list_page)
+
+        self.monthly_view = MonthlyView(self)
+        self.stack.addWidget(self.monthly_view)
+
+        layout.addWidget(self.stack, 1)
 
     def refresh(self):
         self._refresh_contract_options()
+        self._do_filter()
+
+    def _switch_view(self, idx):
+        self.stack.setCurrentIndex(idx)
+        if idx == 1:
+            for b in [self.btn_edit, self.btn_del, self.btn_doc, self.btn_photo, self.btn_machine, self.btn_labor]:
+                b.setEnabled(False)
+        else:
+            for b in [self.btn_edit, self.btn_del, self.btn_doc, self.btn_photo, self.btn_machine, self.btn_labor]:
+                b.setEnabled(True)
+        self._do_filter()
+
+    def _toggle_date_filter(self, state):
+        enabled = bool(state)
+        self.date_from.setEnabled(enabled)
+        self.date_to.setEnabled(enabled)
+        if enabled:
+            if self.date_from.date() == MIN_DATE:
+                self.date_from.setDate(QDate.currentDate().addMonths(-3))
+            if self.date_to.date() == MIN_DATE:
+                self.date_to.setDate(QDate.currentDate())
         self._do_filter()
 
     def _refresh_contract_options(self):
@@ -167,8 +382,11 @@ class EventLedgerWidget(QWidget):
         self.cmb_type.setCurrentIndex(0)
         self.cmb_contract.setCurrentIndex(0)
         self.cmb_resp.setCurrentIndex(0)
-        self.date_from.setDate(QDate.currentDate().addMonths(-3))
-        self.date_to.setDate(QDate.currentDate())
+        self.chk_date_enable.setChecked(False)
+        self.date_from.setDate(MIN_DATE)
+        self.date_to.setDate(MIN_DATE)
+        self.date_from.setEnabled(False)
+        self.date_to.setEnabled(False)
         self.txt_keyword.clear()
         self.chk_missing.setChecked(False)
 
@@ -179,8 +397,14 @@ class EventLedgerWidget(QWidget):
         event_type = self.cmb_type.currentText()
         contract = self.cmb_contract.currentText().strip()
         resp = self.cmb_resp.currentText()
-        date_from = self.date_from.date().toString('yyyy-MM-dd') if self.date_from.date().isValid() else None
-        date_to = self.date_to.date().toString('yyyy-MM-dd') if self.date_to.date().isValid() else None
+        date_from = None
+        date_to = None
+        if self.chk_date_enable.isChecked():
+            if self.date_from.date().isValid() and self.date_from.date() != MIN_DATE:
+                date_from = self.date_from.date().toString('yyyy-MM-dd')
+            if self.date_to.date().isValid() and self.date_to.date() != MIN_DATE:
+                date_to = self.date_to.date().toString('yyyy-MM-dd')
+
         keyword = self.txt_keyword.text().strip() or None
         missing_only = self.chk_missing.isChecked()
 
@@ -212,15 +436,22 @@ class EventLedgerWidget(QWidget):
                 status_item = QTableWidgetItem('✔ 齐全')
                 status_item.setForeground(QColor('#27ae60'))
             else:
-                status_item = QTableWidgetItem(f'缺：{"、".join(missing[:3])}...' if len(missing) > 3 else f'缺：{"、".join(missing)}')
+                if len(missing) > 3:
+                    status_item = QTableWidgetItem('缺：' + '、'.join(missing[:3]) + '...')
+                else:
+                    status_item = QTableWidgetItem('缺：' + '、'.join(missing))
                 status_item.setForeground(QColor('#c0392b'))
             self.table.setItem(i, 9, status_item)
         self.table.blockSignals(False)
+
+        self.monthly_view.set_events(rows)
 
         self.lbl_count.setText(f'共 {len(rows)} 条记录')
         self._update_detail()
 
     def _get_current_id(self):
+        if self.stack.currentIndex() == 1:
+            return None
         row = self.table.currentRow()
         if row < 0:
             return None
@@ -317,7 +548,7 @@ class EventLedgerWidget(QWidget):
 
         missing = EventDAO.get_missing_docs(eid)
         if missing:
-            self.lbl_alert.setText(f"⚠ 支撑材料提醒：还缺少 {'、'.join(missing)}")
+            self.lbl_alert.setText("⚠ 支撑材料提醒：还缺少 " + '、'.join(missing))
             self.lbl_alert.setStyleSheet('color:#c0392b; font-weight:bold; padding:4px; background:#fef0f0;')
         else:
             self.lbl_alert.setText('✔ 支撑材料齐全')

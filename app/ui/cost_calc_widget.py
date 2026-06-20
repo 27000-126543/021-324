@@ -4,7 +4,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTa
                              QTextEdit)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
-from app.db.dao import CostItemDAO, EventDAO, MachineryDAO, LaborDAO
+from app.db.dao import CostItemDAO, EventDAO, MachineryDAO, LaborDAO, CostVersionDAO
+from app.ui.dialogs.version_dialog import VersionDialog
 
 
 class CostCalcWidget(QWidget):
@@ -15,12 +16,23 @@ class CostCalcWidget(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
+        self.current_version_id = None
+
         top = QHBoxLayout()
         top.addWidget(QLabel('选择事件：'))
         self.cmb_events = QComboBox()
         self.cmb_events.setMinimumWidth(360)
         self.cmb_events.currentIndexChanged.connect(self._on_event_changed)
         top.addWidget(self.cmb_events, 1)
+
+        top.addWidget(QLabel('当前版本：'))
+        self.lbl_version = QLabel('未版本化（草稿）')
+        self.lbl_version.setStyleSheet('color:#666; padding: 2px 6px; background: #f5f5f5; border-radius: 3px;')
+        top.addWidget(self.lbl_version)
+
+        btn_version = QPushButton('📋 版本管理')
+        btn_version.clicked.connect(self._open_version_dialog)
+        top.addWidget(btn_version)
 
         btn_refresh = QPushButton('刷新事件列表')
         btn_refresh.clicked.connect(self._refresh_events)
@@ -143,7 +155,18 @@ class CostCalcWidget(QWidget):
         if not eid:
             self.table.setRowCount(0)
             self.txt_summary.clear()
+            self.current_version_id = None
+            self.lbl_version.setText('未版本化（草稿）')
             return
+        cur = CostVersionDAO.get_current_version(eid)
+        if cur:
+            self.current_version_id = cur['id']
+            self.lbl_version.setText(f"{cur['version_name']} ✅")
+            self.lbl_version.setStyleSheet('color:#27ae60; padding: 2px 6px; background: #eafaf1; border-radius: 3px;')
+        else:
+            self.current_version_id = None
+            self.lbl_version.setText('未版本化（草稿）')
+            self.lbl_version.setStyleSheet('color:#666; padding: 2px 6px; background: #f5f5f5; border-radius: 3px;')
         self._refresh_items()
         self._update_summary()
 
@@ -152,7 +175,7 @@ class CostCalcWidget(QWidget):
         if not eid:
             return
         self.table.blockSignals(True)
-        items = CostItemDAO.get_by_event(eid)
+        items = CostItemDAO.get_by_event(eid, self.current_version_id)
         self.table.setRowCount(len(items))
         for i, it in enumerate(items):
             self.table.setItem(i, 0, QTableWidgetItem(str(it['id'])))
@@ -178,6 +201,7 @@ class CostCalcWidget(QWidget):
             return
         CostItemDAO.create({
             'event_id': eid,
+            'version_id': self.current_version_id,
             'cost_category': self.cmb_cat.currentText(),
             'item_name': self.txt_item.text().strip(),
             'unit_price': self.spin_price.value(),
@@ -211,23 +235,33 @@ class CostCalcWidget(QWidget):
 
         col = item.column()
         is_numeric_col = col in (3, 4)
-        price_text = self.table.item(row, 3).text().strip()
-        qty_text = self.table.item(row, 4).text().strip()
+        price_text_raw = self.table.item(row, 3).text()
+        qty_text_raw = self.table.item(row, 4).text()
+        price_text = price_text_raw.strip()
+        qty_text = qty_text_raw.strip()
 
+        price = None
+        qty = None
         if is_numeric_col:
-            try:
-                price = float(price_text) if price_text else 0.0
-            except ValueError:
-                price = None
-            try:
-                qty = float(qty_text) if qty_text else 0.0
-            except ValueError:
-                qty = None
+            price_ok = False
+            qty_ok = False
+            if price_text:
+                try:
+                    price = float(price_text)
+                    price_ok = True
+                except ValueError:
+                    price_ok = False
+            if qty_text:
+                try:
+                    qty = float(qty_text)
+                    qty_ok = True
+                except ValueError:
+                    qty_ok = False
 
-            if price is None or qty is None:
-                QMessageBox.warning(self, '输入有误', '单价和数量必须是数字，请重新输入！\n已恢复为原来的数值。')
+            if not price_ok or not qty_ok:
+                QMessageBox.warning(self, '输入有误', '单价和数量必须是数字，不能是文字或空格！\n已恢复为原来的数值。')
                 self.table.blockSignals(True)
-                items = CostItemDAO.get_by_event(self._get_current_event_id())
+                items = CostItemDAO.get_by_event(self._get_current_event_id(), self.current_version_id)
                 for it in items:
                     if it['id'] == cid:
                         self.table.item(row, 3).setText(f"{it['unit_price']:.2f}")
@@ -240,6 +274,7 @@ class CostCalcWidget(QWidget):
             qty = float(qty_text) if qty_text else 0.0
 
         data = {
+            'version_id': self.current_version_id,
             'cost_category': self.table.item(row, 1).text(),
             'item_name': self.table.item(row, 2).text(),
             'unit_price': price,
@@ -257,12 +292,17 @@ class CostCalcWidget(QWidget):
             self.txt_summary.clear()
             return
         event = EventDAO.get_by_id(eid)
-        items_by_cat, totals, grand = CostItemDAO.get_summary(eid)
+        items_by_cat, totals, grand = CostItemDAO.get_summary(eid, self.current_version_id)
 
         lines = []
         lines.append(' ' * 30 + '停窝工索赔费用汇总表')
+        ver_text = ''
+        if self.current_version_id:
+            cur = CostVersionDAO.get_current_version(eid)
+            if cur:
+                ver_text = f"（测算版本：{cur['version_name']}）"
         lines.append('')
-        lines.append(f"事件编号：{event.get('id', '')}")
+        lines.append(f"事件编号：{event.get('id', '')}    {ver_text}")
         lines.append(f"事件类型：{event.get('event_type', '')}")
         lines.append(f"合同段：{event.get('contract_section', '')}    影响部位：{event.get('affected_area', '')}")
         lines.append(f"起止时间：{event.get('start_date', '')} 至 {event.get('end_date', '（进行中）')}")
@@ -336,7 +376,7 @@ class CostCalcWidget(QWidget):
             QMessageBox.information(self, '提示', '该事件暂无机械停置清单记录')
             return
 
-        existing = CostItemDAO.get_by_event(eid)
+        existing = CostItemDAO.get_by_event(eid, self.current_version_id)
         existing_names = {it['item_name'] for it in existing if it['cost_category'] == '机械费'}
 
         added = 0
@@ -350,6 +390,7 @@ class CostCalcWidget(QWidget):
                 continue
             CostItemDAO.create({
                 'event_id': eid,
+                'version_id': self.current_version_id,
                 'cost_category': '机械费',
                 'item_name': name,
                 'unit_price': 0,
@@ -374,7 +415,7 @@ class CostCalcWidget(QWidget):
             QMessageBox.information(self, '提示', '该事件暂无劳务班组人数记录')
             return
 
-        existing = CostItemDAO.get_by_event(eid)
+        existing = CostItemDAO.get_by_event(eid, self.current_version_id)
         existing_names = {it['item_name'] for it in existing if it['cost_category'] == '人工费'}
 
         added = 0
@@ -387,6 +428,7 @@ class CostCalcWidget(QWidget):
                 continue
             CostItemDAO.create({
                 'event_id': eid,
+                'version_id': self.current_version_id,
                 'cost_category': '人工费',
                 'item_name': name,
                 'unit_price': 0,
@@ -401,12 +443,40 @@ class CostCalcWidget(QWidget):
         self._update_summary()
         QMessageBox.information(self, '导入完成', f'成功导入 {added} 项，跳过重复 {skipped} 项\n请在表格中补充单价后即可计算金额')
 
+    def _open_version_dialog(self):
+        eid = self._get_current_event_id()
+        if not eid:
+            QMessageBox.information(self, '提示', '请先选择一个事件')
+            return
+        dlg = VersionDialog(self, event_id=eid, current_version_id=self.current_version_id)
+        if dlg.exec_():
+            self.current_version_id = dlg.selected_version_id
+            if self.current_version_id:
+                cur = CostVersionDAO.get_current_version(eid)
+                if cur and cur['id'] == self.current_version_id:
+                    self.lbl_version.setText(f"{cur['version_name']} ✅")
+                    self.lbl_version.setStyleSheet('color:#27ae60; padding: 2px 6px; background: #eafaf1; border-radius: 3px;')
+                else:
+                    v = None
+                    for vv in CostVersionDAO.get_versions(eid):
+                        if vv['id'] == self.current_version_id:
+                            v = vv
+                            break
+                    if v:
+                        self.lbl_version.setText(f"{v['version_name']} (浏览)")
+                        self.lbl_version.setStyleSheet('color:#e67e22; padding: 2px 6px; background: #fef9e7; border-radius: 3px;')
+            else:
+                self.lbl_version.setText('未版本化（草稿）')
+                self.lbl_version.setStyleSheet('color:#666; padding: 2px 6px; background: #f5f5f5; border-radius: 3px;')
+            self._refresh_items()
+            self._update_summary()
+
     def _export(self):
         from app.utils.exporter import export_summary
         eid = self._get_current_event_id()
         if not eid:
             QMessageBox.information(self, '提示', '请先选择一个事件')
             return
-        path = export_summary(eid)
+        path = export_summary(eid, version_id=self.current_version_id)
         if path:
             QMessageBox.information(self, '成功', f'已导出：\n{path}')

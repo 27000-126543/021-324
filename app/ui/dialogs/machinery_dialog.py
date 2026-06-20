@@ -105,11 +105,20 @@ class MachineryDialog(QDialog):
             return
         mid = int(self.table.item(row, 0).text())
 
-        qty_text = self.table.item(row, 4).text().strip()
-        try:
-            quantity = float(qty_text) if qty_text else 0.0
-        except ValueError:
-            QMessageBox.warning(self, '输入有误', '数量必须是数字，请重新输入！\n已恢复为原来的数值。')
+        qty_text_original = self.table.item(row, 4).text()
+        qty_text = qty_text_original.strip()
+        quantity = None
+        if not qty_text:
+            is_valid = False
+        else:
+            try:
+                quantity = float(qty_text)
+                is_valid = True
+            except ValueError:
+                is_valid = False
+
+        if not is_valid:
+            QMessageBox.warning(self, '输入有误', '数量必须是数字，不能是文字或空格！\n已恢复为原来的数值。')
             self.table.blockSignals(True)
             records = MachineryDAO.get_by_event(self.event_id)
             for r in records:

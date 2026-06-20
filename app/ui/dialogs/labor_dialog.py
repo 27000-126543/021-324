@@ -99,14 +99,23 @@ class LaborDialog(QDialog):
             return
         lid = int(self.table.item(row, 0).text())
 
-        count_text = self.table.item(row, 3).text().strip()
-        try:
-            count_text_clean = count_text.replace('.', '')
-            worker_count = int(count_text_clean) if count_text_clean else 0
-            if worker_count < 0:
-                raise ValueError
-        except (ValueError, TypeError):
-            QMessageBox.warning(self, '输入有误', '人数必须是整数，请重新输入！\n已恢复为原来的数值。')
+        count_text_original = self.table.item(row, 3).text()
+        count_text = count_text_original.strip()
+        worker_count = None
+        is_valid = True
+        if not count_text:
+            is_valid = False
+        else:
+            try:
+                count_text_clean = count_text.replace('.', '')
+                worker_count = int(count_text_clean)
+                if worker_count < 0:
+                    is_valid = False
+            except (ValueError, TypeError):
+                is_valid = False
+
+        if not is_valid:
+            QMessageBox.warning(self, '输入有误', '人数必须是正整数，不能是文字、小数或空格！\n已恢复为原来的数值。')
             self.table.blockSignals(True)
             records = LaborDAO.get_by_event(self.event_id)
             for r in records:

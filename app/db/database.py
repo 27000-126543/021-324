@@ -84,9 +84,22 @@ def init_database():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cost_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            version_name TEXT NOT NULL,
+            version_desc TEXT,
+            is_current INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS cost_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_id INTEGER NOT NULL,
+            version_id INTEGER,
             cost_category TEXT NOT NULL,
             item_name TEXT NOT NULL,
             unit_price REAL DEFAULT 0,
@@ -95,7 +108,8 @@ def init_database():
             remark TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+            FOREIGN KEY (version_id) REFERENCES cost_versions(id) ON DELETE SET NULL
         )
     ''')
 
@@ -111,6 +125,23 @@ def init_database():
             FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
         )
     ''')
+
+    try:
+        cursor.execute("ALTER TABLE cost_items ADD COLUMN version_id INTEGER REFERENCES cost_versions(id) ON DELETE SET NULL")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("SELECT visa_received FROM events LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cursor.execute("ALTER TABLE events ADD COLUMN visa_received INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE events ADD COLUMN resume_order_received INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
 
     conn.commit()
     conn.close()
