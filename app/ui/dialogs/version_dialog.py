@@ -55,9 +55,19 @@ class VersionDialog(QDialog):
         rlayout.addRow('明细合计：', self.lbl_totals)
         rlayout.addRow('金额总计：', self.lbl_grand)
 
-        comp_group = QGroupBox('版本对比（与当前版本）')
+        comp_group = QGroupBox('版本对比（任选两个版本）')
         complayout = QVBoxLayout(comp_group)
-        self.lbl_compare = QLabel('请在左侧选择要对比的版本')
+
+        comp_sel_row = QHBoxLayout()
+        comp_sel_row.addWidget(QLabel('版本A：'))
+        self.cmb_comp_v1 = QComboBox()
+        comp_sel_row.addWidget(self.cmb_comp_v1, 1)
+        comp_sel_row.addWidget(QLabel('→ 版本B：'))
+        self.cmb_comp_v2 = QComboBox()
+        comp_sel_row.addWidget(self.cmb_comp_v2, 1)
+        complayout.addLayout(comp_sel_row)
+
+        self.lbl_compare = QLabel('请选择两个版本进行对比')
         self.lbl_compare.setWordWrap(True)
         complayout.addWidget(self.lbl_compare)
 
@@ -102,6 +112,19 @@ class VersionDialog(QDialog):
             item.setFlags(Qt.NoItemFlags)
             self.version_list.addItem(item)
 
+        self.cmb_comp_v1.clear()
+        self.cmb_comp_v2.clear()
+        if versions:
+            for v in versions:
+                label = f"{v['version_name']}（￥{CostItemDAO.get_summary(self.event_id, v['id'])[2]:,.0f}）"
+                self.cmb_comp_v1.addItem(label, v['id'])
+                self.cmb_comp_v2.addItem(label, v['id'])
+            if len(versions) >= 2:
+                self.cmb_comp_v2.setCurrentIndex(1)
+        else:
+            self.cmb_comp_v1.addItem('（无版本）', None)
+            self.cmb_comp_v2.addItem('（无版本）', None)
+
     def _on_select(self):
         item = self.version_list.currentItem()
         if not item or item.data(Qt.UserRole) is None:
@@ -136,7 +159,25 @@ class VersionDialog(QDialog):
         desc, ok = QInputDialog.getMultiLineText(self, '版本说明', '可选：说明与上一版相比调整了什么：', '')
         if not ok:
             return
-        vid = CostVersionDAO.create_version(self.event_id, name.strip(), desc.strip())
+
+        source_vid = None
+        item = self.version_list.currentItem()
+        if item and item.data(Qt.UserRole) is not None:
+            source_vid = item.data(Qt.UserRole)
+            src_v = item.data(Qt.UserRole + 1)
+            reply = QMessageBox.question(
+                self, '确认',
+                f'是否以「{src_v["version_name"]}」为基础创建新版本？\n'
+                f'是 - 复制该版本全部明细\n'
+                f'否 - 从当前草稿创建',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.No:
+                source_vid = None
+
+        vid = CostVersionDAO.create_version(self.event_id, name.strip(), desc.strip(), source_version_id=source_vid)
         QMessageBox.information(self, '成功', f'版本已保存，ID: {vid}')
         self._refresh()
 
@@ -160,21 +201,20 @@ class VersionDialog(QDialog):
             CostVersionDAO.delete_version(vid)
             self._refresh()
 
+    def _get_compare_versions(self):
+        vid1 = self.cmb_comp_v1.currentData()
+        vid2 = self.cmb_comp_v2.currentData()
+        v1_name = self.cmb_comp_v1.currentText()
+        v2_name = self.cmb_comp_v2.currentText()
+        return vid1, vid2, v1_name, v2_name
+
     def _compare(self):
-        item = self.version_list.currentItem()
-        if not item or item.data(Qt.UserRole) is None:
-            QMessageBox.information(self, '提示', '请选择要对比的版本')
+        vid1, vid2, v1_name, v2_name = self._get_compare_versions()
+        if not vid1 or not vid2:
+            QMessageBox.information(self, '提示', '请选择两个版本进行对比')
             return
-        vid1 = item.data(Qt.UserRole)
-        cur = CostVersionDAO.get_current_version(self.event_id)
-        if not cur:
-            QMessageBox.information(self, '提示', '当前还没有版本，无法对比')
-            return
-        vid2 = cur['id']
         diff, cat_diff, g1, g2 = CostVersionDAO.compare_versions(self.event_id, vid1, vid2)
         lines = []
-        v1_name = item.text().split(' - ')[0]
-        v2_name = cur['version_name']
         lines.append(f'对比：{v1_name}  →  {v2_name}')
         lines.append(f'')
         lines.append(f'原金额：￥{g1:,.2f}')
@@ -191,18 +231,10 @@ class VersionDialog(QDialog):
         self.lbl_compare.setText('<br>'.join(lines))
 
     def _compare_detail(self):
-        item = self.version_list.currentItem()
-        if not item or item.data(Qt.UserRole) is None:
-            QMessageBox.information(self, '提示', '请选择要对比的版本')
+        vid1, vid2, v1_name, v2_name = self._get_compare_versions()
+        if not vid1 or not vid2:
+            QMessageBox.information(self, '提示', '请选择两个版本进行对比')
             return
-        vid1 = item.data(Qt.UserRole)
-        cur = CostVersionDAO.get_current_version(self.event_id)
-        if not cur:
-            QMessageBox.information(self, '提示', '当前还没有版本，无法对比')
-            return
-        vid2 = cur['id']
-        v1_name = item.text().split(' - ')[0]
-        v2_name = cur['version_name']
         dlg = CompareDetailDialog(self, self.event_id, vid1, vid2, v1_name, v2_name)
         dlg.exec_()
 

@@ -236,7 +236,8 @@ class CostCalcWidget(QWidget):
             vdesc, ok2 = QInputDialog.getText(self, '版本说明', '请输入版本说明（可选）：')
             if not ok2:
                 vdesc = ''
-            new_vid = CostVersionDAO.create_version(eid, vname.strip(), vdesc.strip())
+            src_vid = self.current_version_id if is_current else self.current_version_id
+            new_vid = CostVersionDAO.create_version(eid, vname.strip(), vdesc.strip(), source_version_id=src_vid)
             self.current_version_id = new_vid
             cur2 = CostVersionDAO.get_current_version(eid)
             if cur2:
@@ -360,6 +361,14 @@ class CostCalcWidget(QWidget):
         self._refresh_items()
         self._update_summary()
 
+    def _get_version_name(self, event_id, version_id):
+        if not version_id:
+            return '未版本化（草稿）'
+        for v in CostVersionDAO.get_versions(event_id):
+            if v['id'] == version_id:
+                return v.get('version_name', '')
+        return '未知版本'
+
     def _update_summary(self):
         eid = self._get_current_event_id()
         if not eid:
@@ -372,9 +381,12 @@ class CostCalcWidget(QWidget):
         lines.append(' ' * 30 + '停窝工索赔费用汇总表')
         ver_text = ''
         if self.current_version_id:
+            vname = self._get_version_name(eid, self.current_version_id)
             cur = CostVersionDAO.get_current_version(eid)
-            if cur:
-                ver_text = f"（测算版本：{cur['version_name']}）"
+            is_cur = cur and cur['id'] == self.current_version_id
+            ver_text = f"（测算版本：{vname}{' ✅当前' if is_cur else ''}）"
+        else:
+            ver_text = '（草稿，未保存版本）'
         lines.append('')
         lines.append(f"事件编号：{event.get('id', '')}    {ver_text}")
         lines.append(f"事件类型：{event.get('event_type', '')}")

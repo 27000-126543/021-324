@@ -382,7 +382,7 @@ class CostItemDAO:
 
 class CostVersionDAO:
     @staticmethod
-    def create_version(event_id, version_name, version_desc=''):
+    def create_version(event_id, version_name, version_desc='', source_version_id=None):
         conn = get_connection()
         cursor = conn.cursor()
         now = _now()
@@ -392,8 +392,13 @@ class CostVersionDAO:
             VALUES (?, ?, ?, 1, ?)
         ''', (event_id, version_name, version_desc, now))
         vid = cursor.lastrowid
-        existing_items = CostItemDAO.get_by_event(event_id, version_id=None)
-        for it in existing_items:
+
+        if source_version_id:
+            source_items = CostItemDAO.get_by_event(event_id, source_version_id)
+        else:
+            source_items = CostItemDAO.get_by_event(event_id, version_id=None)
+
+        for it in source_items:
             cursor.execute('''
                 INSERT INTO cost_items (event_id, version_id, cost_category, item_name, unit_price, quantity, unit, remark, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
