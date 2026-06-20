@@ -64,6 +64,11 @@ class EventDialog(QDialog):
         form.addRow('', self.chk_visa)
         form.addRow('', self.chk_resume)
 
+        self.cmb_follow = QComboBox()
+        for code, label in EventDAO.FOLLOW_STATUSES:
+            self.cmb_follow.addItem(label, code)
+        form.addRow('跟进状态：', self.cmb_follow)
+
         self.txt_desc = QTextEdit()
         self.txt_desc.setPlaceholderText('事件详细描述，包括原因、影响范围、处理过程等')
         self.txt_desc.setMaximumHeight(100)
@@ -95,6 +100,10 @@ class EventDialog(QDialog):
             self.txt_order.setText(data.get('owner_order_no', ''))
             self.chk_visa.setChecked(bool(data.get('visa_received')))
             self.chk_resume.setChecked(bool(data.get('resume_order_received')))
+            fs = data.get('follow_status', '')
+            idx = self.cmb_follow.findData(fs)
+            if idx >= 0:
+                self.cmb_follow.setCurrentIndex(idx)
             self.txt_desc.setPlainText(data.get('description', ''))
 
     def _on_accept(self):
@@ -113,6 +122,7 @@ class EventDialog(QDialog):
             'description': self.txt_desc.toPlainText().strip(),
             'visa_received': 1 if self.chk_visa.isChecked() else 0,
             'resume_order_received': 1 if self.chk_resume.isChecked() else 0,
+            'follow_status': self.cmb_follow.currentData(),
         }
         if self.event_id:
             EventDAO.update(self.event_id, data)

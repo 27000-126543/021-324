@@ -143,5 +143,13 @@ def init_database():
         except sqlite3.OperationalError:
             pass
 
+    try:
+        cursor.execute("SELECT follow_status FROM events LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cursor.execute("ALTER TABLE events ADD COLUMN follow_status TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     conn.close()

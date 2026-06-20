@@ -7,6 +7,14 @@ def _now():
 
 
 class EventDAO:
+    FOLLOW_STATUSES = [
+        ('', '未设置'),
+        ('pending_commercial', '待商务补'),
+        ('pending_site', '待现场补'),
+        ('reminded', '已催办'),
+        ('closed', '已闭合'),
+    ]
+
     @staticmethod
     def create(data):
         conn = get_connection()
@@ -15,8 +23,8 @@ class EventDAO:
         cursor.execute('''
             INSERT INTO events (event_type, contract_section, affected_area, start_date, end_date,
                                 responsible_party, supervision_notice_no, owner_order_no, description,
-                                visa_received, resume_order_received, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                visa_received, resume_order_received, follow_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data.get('event_type', ''),
             data.get('contract_section', ''),
@@ -29,6 +37,7 @@ class EventDAO:
             data.get('description', ''),
             data.get('visa_received', 0),
             data.get('resume_order_received', 0),
+            data.get('follow_status', ''),
             now, now
         ))
         conn.commit()
@@ -44,7 +53,7 @@ class EventDAO:
         cursor.execute('''
             UPDATE events SET event_type=?, contract_section=?, affected_area=?, start_date=?, end_date=?,
                               responsible_party=?, supervision_notice_no=?, owner_order_no=?, description=?,
-                              visa_received=?, resume_order_received=?, updated_at=?
+                              visa_received=?, resume_order_received=?, follow_status=?, updated_at=?
             WHERE id=?
         ''', (
             data.get('event_type', ''),
@@ -58,6 +67,7 @@ class EventDAO:
             data.get('description', ''),
             data.get('visa_received', 0),
             data.get('resume_order_received', 0),
+            data.get('follow_status', ''),
             now, event_id
         ))
         conn.commit()
@@ -436,6 +446,77 @@ class CostVersionDAO:
         _, t2, g2 = CostItemDAO.get_summary(event_id, version_id2)
         diff = {cat: t2[cat] - t1[cat] for cat in CostItemDAO.CATEGORIES}
         return g2 - g1, diff, g1, g2
+
+    @staticmethod
+    def compare_versions_detail(event_id, version_id1, version_id2):
+        items1 = CostItemDAO.get_by_event(event_id, version_id1)
+        items2 = CostItemDAO.get_by_event(event_id, version_id2)
+
+        key = lambda it: (it['cost_category'], it['item_name'])
+        map1 = {key(it): it for it in items1}
+        map2 = {key(it): it for it in items2}
+
+        added = []
+        removed = []
+        changed = []
+
+        for k in map2:
+            if k not in map1:
+                it = map2[k]
+                added.append({
+                    'category': it['cost_category'],
+                    'item_name': it['item_name'],
+                    'price': it['unit_price'],
+                    'qty': it['quantity'],
+                    'amount': it['unit_price'] * it['quantity'],
+                })
+
+        for k in map1:
+            if k not in map2:
+                it = map1[k]
+                removed.append({
+                    'category': it['cost_category'],
+                    'item_name': it['item_name'],
+                    'price': it['unit_price'],
+                    'qty': it['quantity'],
+                    'amount': it['unit_price'] * it['quantity'],
+                })
+
+        for k in map1:
+            if k in map2:
+                it1 = map1[k]
+                it2 = map2[k]
+                p1 = it1['unit_price']
+                p2 = it2['unit_price']
+                q1 = it1['quantity']
+                q2 = it2['quantity']
+                a1 = p1 * q1
+                a2 = p2 * q2
+                if p1 != p2 or q1 != q2:
+                    price_change = p2 - p1
+                    qty_change = q2 - q1
+                    amount_change = a2 - a1
+                    changes = []
+                    if price_change != 0:
+                        changes.append(f"单价 {p1:,.2f}→{p2:,.2f} ({price_change:+,.2f})")
+                    if qty_change != 0:
+                        changes.append(f"数量 {q1:,.2f}→{q2:,.2f} ({qty_change:+,.2f})")
+                    changed.append({
+                        'category': it1['cost_category'],
+                        'item_name': it1['item_name'],
+                        'price_old': p1,
+                        'price_new': p2,
+                        'price_change': price_change,
+                        'qty_old': q1,
+                        'qty_new': q2,
+                        'qty_change': qty_change,
+                        'amount_old': a1,
+                        'amount_new': a2,
+                        'amount_change': amount_change,
+                        'change_desc': '；'.join(changes),
+                    })
+
+        return added, removed, changed
 
 
 class DocumentDAO:

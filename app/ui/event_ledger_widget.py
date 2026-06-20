@@ -11,12 +11,21 @@ from app.ui.dialogs.photo_dialog import PhotoDialog
 from app.ui.dialogs.machinery_dialog import MachineryDialog
 from app.ui.dialogs.labor_dialog import LaborDialog
 from app.ui.dialogs.document_dialog import DocumentDialog
+from app.utils.exporter import export_monthly_archive
 
 
 MIN_DATE = QDate(2000, 1, 1)
 
 
 class EventCard(QWidget):
+    FOLLOW_STATUS_MAP = {
+        'pending_commercial': ('待商务补', '#e67e22', '#fef9e7'),
+        'pending_site': ('待现场补', '#3498db', '#eaf2f8'),
+        'reminded': ('已催办', '#9b59b6', '#f5eef8'),
+        'closed': ('已闭合', '#27ae60', '#eafaf1'),
+        '': ('未设置', '#95a5a6', '#f4f6f7'),
+    }
+
     def __init__(self, event_data, missing_docs, parent_widget=None):
         super().__init__()
         self.event_id = event_data['id']
@@ -46,6 +55,13 @@ class EventCard(QWidget):
             status.setStyleSheet('color: #27ae60; font-weight: bold;')
         header.addWidget(status)
         layout.addLayout(header)
+
+        fs = ev.get('follow_status', '') or ''
+        fs_label, fs_color, fs_bg = self.FOLLOW_STATUS_MAP.get(fs, self.FOLLOW_STATUS_MAP[''])
+        if fs:
+            fs_tag = QLabel(f'⚑ {fs_label}')
+            fs_tag.setStyleSheet(f'color: {fs_color}; background: {fs_bg}; padding: 2px 6px; border-radius: 3px; font-size: 8pt; font-weight: bold;')
+            layout.addWidget(fs_tag)
 
         sub = QLabel(f"{ev.get('contract_section', '')} | {ev.get('responsible_party', '')}")
         sub.setStyleSheet('color: #7f8c8d; font-size: 9pt;')
@@ -117,7 +133,20 @@ class MonthGroup(QGroupBox):
         complete = sum(1 for e in self.events if not e['_missing'])
         missing_count = total - complete
 
-        self.setTitle(f'{month}  |  共 {total} 个事件  |  ✔ 齐全 {complete}  |  ✘ 待补 {missing_count}')
+        fs_counts = {}
+        for e in self.events:
+            fs = e.get('follow_status', '') or ''
+            fs_counts[fs] = fs_counts.get(fs, 0) + 1
+
+        fs_map = EventCard.FOLLOW_STATUS_MAP
+        fs_parts = []
+        for code, (label, _, _) in fs_map.items():
+            if code in fs_counts and fs_counts[code] > 0:
+                fs_parts.append(f'{label}:{fs_counts[code]}')
+        fs_summary = '  |  '.join(fs_parts) if fs_parts else ''
+
+        self.setTitle(f'{month}  |  共 {total} 个事件  |  ✔ 齐全 {complete}  |  ✘ 待补 {missing_count}' +
+                      (f'  |  状态: {fs_summary}' if fs_summary else ''))
         self.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #bbb; border-radius: 8px; margin-top: 12px; padding-top: 10px; }'
                           'QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }')
 
@@ -126,10 +155,8 @@ class MonthGroup(QGroupBox):
 
         if missing_count > 0:
             self.setStyleSheet(self.styleSheet().replace('#bbb', '#e67e22'))
-            self.setTitle(f'{month}  |  共 {total} 个事件  |  ✔ 齐全 {complete}  |  ✘ 待补 {missing_count}  ⚠ 需要整理')
         else:
             self.setStyleSheet(self.styleSheet().replace('#bbb', '#27ae60'))
-            self.setTitle(f'{month}  |  共 {total} 个事件  |  ✔ 齐全 {complete}  |  ✔ 已归档完成')
 
         grid = QGridLayout()
         grid.setSpacing(8)
@@ -280,11 +307,16 @@ class EventLedgerWidget(QWidget):
         self.btn_machine.clicked.connect(self._open_machine)
         self.btn_labor.clicked.connect(self._open_labor)
 
+        self.btn_export_archive = QPushButton('📊 导出月度归档清单')
+        self.btn_export_archive.clicked.connect(self._export_archive)
+
         for b in [self.btn_add, self.btn_edit, self.btn_del]:
             btn_bar.addWidget(b)
         btn_bar.addSpacing(20)
         for b in [self.btn_doc, self.btn_photo, self.btn_machine, self.btn_labor]:
             btn_bar.addWidget(b)
+        btn_bar.addSpacing(20)
+        btn_bar.addWidget(self.btn_export_archive)
         btn_bar.addStretch(1)
         self.lbl_count = QLabel('共 0 条记录')
         btn_bar.addWidget(self.lbl_count)
@@ -479,6 +511,19 @@ class EventLedgerWidget(QWidget):
         if QMessageBox.question(self, '确认', '确定删除该事件及关联的所有照片、清单、档案和费用数据？') == QMessageBox.Yes:
             EventDAO.delete(eid)
             self.refresh()
+
+    def _export_archive(self):
+        from PyQt5.QtWidgets import QInputDialog
+        ym_list = {e.get('start_date', '')[:7] for e in EventDAO.get_all() if e.get('start_date', '')}
+        ym_list = sorted({ym for ym in ym_list if len(ym) == 7}, reverse=True)
+        items = ['全部月份'] + ym_list
+        choice, ok = QInputDialog.getItem(self, '选择月份', '请选择要导出的月份：', items, 0, False)
+        if not ok:
+            return
+        ym = None if choice == '全部月份' else choice
+        path = export_monthly_archive(ym)
+        if path:
+            QMessageBox.information(self, '成功', f'已导出：\n{path}')
 
     def _open_doc(self):
         eid = self._get_current_id()

@@ -191,10 +191,76 @@ class CostCalcWidget(QWidget):
             self.table.setItem(i, 7, QTableWidgetItem(it.get('remark', '')))
         self.table.blockSignals(False)
 
+    def _ensure_draft_mode(self):
+        eid = self._get_current_event_id()
+        if not eid:
+            return False
+        if self.current_version_id is None:
+            return True
+
+        cur = CostVersionDAO.get_current_version(eid)
+        is_current = cur and cur['id'] == self.current_version_id
+
+        if is_current:
+            reply = QMessageBox.question(
+                self, '版本保护',
+                '当前正在查看已保存的测算版本，直接修改会覆盖历史数据。\n\n'
+                '是否另存为新版本后再修改？\n'
+                '  是 - 另存新版本，在新版本上修改\n'
+                '  否 - 回到草稿状态（不保留当前版本内容）\n'
+                '  取消 - 不做任何修改',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes
+            )
+        else:
+            reply = QMessageBox.question(
+                self, '版本保护',
+                '当前正在浏览历史版本，不能直接修改历史快照。\n\n'
+                '是否以当前版本为基础新建一个草稿？\n'
+                '  是 - 基于此版本新建草稿后修改\n'
+                '  否 - 回到最新草稿\n'
+                '  取消 - 不做任何修改',
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes
+            )
+
+        if reply == QMessageBox.Cancel:
+            return False
+
+        if reply == QMessageBox.Yes:
+            from PyQt5.QtWidgets import QInputDialog
+            default_name = f"V{len(CostVersionDAO.get_versions(eid)) + 1}"
+            vname, ok = QInputDialog.getText(self, '保存新版本', '请输入版本名称：', text=default_name)
+            if not ok or not vname.strip():
+                return False
+            vdesc, ok2 = QInputDialog.getText(self, '版本说明', '请输入版本说明（可选）：')
+            if not ok2:
+                vdesc = ''
+            new_vid = CostVersionDAO.create_version(eid, vname.strip(), vdesc.strip())
+            self.current_version_id = new_vid
+            cur2 = CostVersionDAO.get_current_version(eid)
+            if cur2:
+                self.lbl_version.setText(f"{cur2['version_name']} ✅")
+                self.lbl_version.setStyleSheet('color:#27ae60; padding: 2px 6px; background: #eafaf1; border-radius: 3px;')
+            self._refresh_items()
+            return True
+
+        if reply == QMessageBox.No:
+            self.current_version_id = None
+            self.lbl_version.setText('未版本化（草稿）')
+            self.lbl_version.setStyleSheet('color:#666; padding: 2px 6px; background: #f5f5f5; border-radius: 3px;')
+            self._refresh_items()
+            self._update_summary()
+            return True
+
+        return False
+
     def _add_item(self):
         eid = self._get_current_event_id()
         if not eid:
             QMessageBox.information(self, '提示', '请先选择一个事件')
+            return
+        if not self._ensure_draft_mode():
             return
         if not self.txt_item.text().strip():
             QMessageBox.information(self, '提示', '请填写项目名称')
@@ -221,6 +287,8 @@ class CostCalcWidget(QWidget):
         if row < 0:
             QMessageBox.information(self, '提示', '请选择一行')
             return
+        if not self._ensure_draft_mode():
+            return
         cid = int(self.table.item(row, 0).text())
         if QMessageBox.question(self, '确认', '确定删除该费用项？') == QMessageBox.Yes:
             CostItemDAO.delete(cid)
@@ -232,6 +300,12 @@ class CostCalcWidget(QWidget):
         if self.table.item(row, 0) is None:
             return
         cid = int(self.table.item(row, 0).text())
+
+        if not self._ensure_draft_mode():
+            self.table.blockSignals(True)
+            self._refresh_items()
+            self.table.blockSignals(False)
+            return
 
         col = item.column()
         is_numeric_col = col in (3, 4)
@@ -371,6 +445,8 @@ class CostCalcWidget(QWidget):
         if not eid:
             QMessageBox.information(self, '提示', '请先选择一个事件')
             return
+        if not self._ensure_draft_mode():
+            return
         machines = MachineryDAO.get_by_event(eid)
         if not machines:
             QMessageBox.information(self, '提示', '该事件暂无机械停置清单记录')
@@ -409,6 +485,8 @@ class CostCalcWidget(QWidget):
         eid = self._get_current_event_id()
         if not eid:
             QMessageBox.information(self, '提示', '请先选择一个事件')
+            return
+        if not self._ensure_draft_mode():
             return
         labors = LaborDAO.get_by_event(eid)
         if not labors:
