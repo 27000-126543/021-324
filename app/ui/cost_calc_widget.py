@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTa
                              QTextEdit)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
-from app.db.dao import CostItemDAO, EventDAO
+from app.db.dao import CostItemDAO, EventDAO, MachineryDAO, LaborDAO
 
 
 class CostCalcWidget(QWidget):
@@ -89,8 +89,14 @@ class CostCalcWidget(QWidget):
         ilayout.addWidget(self.table, 1)
 
         btn_row = QHBoxLayout()
+        btn_import_mach = QPushButton('⬇ 从机械清单导入')
+        btn_import_mach.clicked.connect(self._import_machinery)
+        btn_import_labor = QPushButton('⬇ 从劳务班组导入')
+        btn_import_labor.clicked.connect(self._import_labor)
         btn_del = QPushButton('删除选中')
         btn_del.clicked.connect(self._delete_item)
+        btn_row.addWidget(btn_import_mach)
+        btn_row.addWidget(btn_import_labor)
         btn_row.addStretch(1)
         btn_row.addWidget(btn_del)
         ilayout.addLayout(btn_row)
@@ -202,11 +208,37 @@ class CostCalcWidget(QWidget):
         if self.table.item(row, 0) is None:
             return
         cid = int(self.table.item(row, 0).text())
-        try:
-            price = float(self.table.item(row, 3).text() or 0)
-            qty = float(self.table.item(row, 4).text() or 0)
-        except ValueError:
-            price, qty = 0, 0
+
+        col = item.column()
+        is_numeric_col = col in (3, 4)
+        price_text = self.table.item(row, 3).text().strip()
+        qty_text = self.table.item(row, 4).text().strip()
+
+        if is_numeric_col:
+            try:
+                price = float(price_text) if price_text else 0.0
+            except ValueError:
+                price = None
+            try:
+                qty = float(qty_text) if qty_text else 0.0
+            except ValueError:
+                qty = None
+
+            if price is None or qty is None:
+                QMessageBox.warning(self, '输入有误', '单价和数量必须是数字，请重新输入！\n已恢复为原来的数值。')
+                self.table.blockSignals(True)
+                items = CostItemDAO.get_by_event(self._get_current_event_id())
+                for it in items:
+                    if it['id'] == cid:
+                        self.table.item(row, 3).setText(f"{it['unit_price']:.2f}")
+                        self.table.item(row, 4).setText(f"{it['quantity']:.2f}")
+                        break
+                self.table.blockSignals(False)
+                return
+        else:
+            price = float(price_text) if price_text else 0.0
+            qty = float(qty_text) if qty_text else 0.0
+
         data = {
             'cost_category': self.table.item(row, 1).text(),
             'item_name': self.table.item(row, 2).text(),
@@ -293,6 +325,81 @@ class CostCalcWidget(QWidget):
             if fen:
                 result += digits[fen] + '分'
         return result
+
+    def _import_machinery(self):
+        eid = self._get_current_event_id()
+        if not eid:
+            QMessageBox.information(self, '提示', '请先选择一个事件')
+            return
+        machines = MachineryDAO.get_by_event(eid)
+        if not machines:
+            QMessageBox.information(self, '提示', '该事件暂无机械停置清单记录')
+            return
+
+        existing = CostItemDAO.get_by_event(eid)
+        existing_names = {it['item_name'] for it in existing if it['cost_category'] == '机械费'}
+
+        added = 0
+        skipped = 0
+        for m in machines:
+            name = f"{m['machine_name']}停置"
+            if m.get('specification'):
+                name = f"{m['machine_name']}（{m['specification']}）停置"
+            if name in existing_names:
+                skipped += 1
+                continue
+            CostItemDAO.create({
+                'event_id': eid,
+                'cost_category': '机械费',
+                'item_name': name,
+                'unit_price': 0,
+                'quantity': m.get('quantity', 0),
+                'unit': m.get('unit', '台·天'),
+                'remark': f"来自机械清单（{m['record_date']}）",
+            })
+            existing_names.add(name)
+            added += 1
+
+        self._refresh_items()
+        self._update_summary()
+        QMessageBox.information(self, '导入完成', f'成功导入 {added} 项，跳过重复 {skipped} 项\n请在表格中补充单价后即可计算金额')
+
+    def _import_labor(self):
+        eid = self._get_current_event_id()
+        if not eid:
+            QMessageBox.information(self, '提示', '请先选择一个事件')
+            return
+        labors = LaborDAO.get_by_event(eid)
+        if not labors:
+            QMessageBox.information(self, '提示', '该事件暂无劳务班组人数记录')
+            return
+
+        existing = CostItemDAO.get_by_event(eid)
+        existing_names = {it['item_name'] for it in existing if it['cost_category'] == '人工费'}
+
+        added = 0
+        skipped = 0
+        for l in labors:
+            work_type = l.get('work_type', '') or '普工'
+            name = f"{l['team_name']}（{work_type}）窝工"
+            if name in existing_names:
+                skipped += 1
+                continue
+            CostItemDAO.create({
+                'event_id': eid,
+                'cost_category': '人工费',
+                'item_name': name,
+                'unit_price': 0,
+                'quantity': l.get('worker_count', 0),
+                'unit': '工日',
+                'remark': f"来自劳务清单（{l['record_date']}）",
+            })
+            existing_names.add(name)
+            added += 1
+
+        self._refresh_items()
+        self._update_summary()
+        QMessageBox.information(self, '导入完成', f'成功导入 {added} 项，跳过重复 {skipped} 项\n请在表格中补充单价后即可计算金额')
 
     def _export(self):
         from app.utils.exporter import export_summary

@@ -90,31 +90,86 @@ class EventDAO:
         return [dict(r) for r in rows]
 
     @staticmethod
+    def filter(event_type=None, contract_section=None, responsible_party=None,
+               date_from=None, date_to=None, missing_only=False, keyword=None):
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = 'SELECT * FROM events WHERE 1=1'
+        params = []
+        if event_type and event_type != '全部':
+            sql += ' AND event_type=?'
+            params.append(event_type)
+        if contract_section and contract_section != '全部':
+            sql += ' AND contract_section LIKE ?'
+            params.append(f'%{contract_section}%')
+        if responsible_party and responsible_party != '全部':
+            sql += ' AND responsible_party=?'
+            params.append(responsible_party)
+        if date_from:
+            sql += ' AND start_date >= ?'
+            params.append(date_from)
+        if date_to:
+            sql += ' AND start_date <= ?'
+            params.append(date_to)
+        if keyword:
+            sql += ' AND (affected_area LIKE ? OR description LIKE ? OR supervision_notice_no LIKE ? OR owner_order_no LIKE ?)'
+            k = f'%{keyword}%'
+            params.extend([k, k, k, k])
+        sql += ' ORDER BY start_date DESC, id DESC'
+        cursor.execute(sql, params)
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        if missing_only:
+            rows = [r for r in rows if EventDAO.get_missing_docs(r['id'])]
+        return rows
+
+    @staticmethod
+    def get_unique_contract_sections():
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT contract_section FROM events WHERE contract_section IS NOT NULL AND contract_section <> '' ORDER BY contract_section")
+        rows = [r[0] for r in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    @staticmethod
     def get_missing_docs(event_id):
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM events WHERE id=?', (event_id,))
         row = cursor.fetchone()
-        conn.close()
         if not row:
+            conn.close()
             return []
+
+        cursor.execute('SELECT doc_type, COUNT(*) as cnt FROM documents WHERE event_id=? GROUP BY doc_type', (event_id,))
+        doc_counts = {r['doc_type']: r['cnt'] for r in cursor.fetchall()}
+
+        cursor.execute('SELECT COUNT(*) as cnt FROM photos WHERE event_id=?', (event_id,))
+        photo_count = cursor.fetchone()['cnt']
+
+        cursor.execute('SELECT COUNT(*) as cnt FROM machinery WHERE event_id=?', (event_id,))
+        machine_count = cursor.fetchone()['cnt']
+
+        cursor.execute('SELECT COUNT(*) as cnt FROM labor WHERE event_id=?', (event_id,))
+        labor_count = cursor.fetchone()['cnt']
+        conn.close()
+
         missing = []
-        if not row['visa_received']:
+        if doc_counts.get('现场签证单', 0) == 0:
             missing.append('现场签证单')
-        if not row['resume_order_received']:
+        if doc_counts.get('复工令', 0) == 0:
             missing.append('复工令')
-        cursor2 = get_connection().cursor()
-        cursor2.execute('SELECT COUNT(*) as cnt FROM photos WHERE event_id=?', (event_id,))
-        if cursor2.fetchone()['cnt'] == 0:
+        if doc_counts.get('监理通知', 0) == 0:
+            missing.append('监理通知')
+        if doc_counts.get('业主指令', 0) == 0:
+            missing.append('业主指令')
+        if photo_count == 0:
             missing.append('现场照片')
-        cursor2.execute('SELECT COUNT(*) as cnt FROM machinery WHERE event_id=?', (event_id,))
-        if cursor2.fetchone()['cnt'] == 0:
+        if machine_count == 0:
             missing.append('机械停置清单')
-        cursor2.execute('SELECT COUNT(*) as cnt FROM labor WHERE event_id=?', (event_id,))
-        if cursor2.fetchone()['cnt'] == 0:
+        if labor_count == 0:
             missing.append('劳务班组人数记录')
-        cursor2.close()
-        cursor2.connection.close()
         return missing
 
 
@@ -303,3 +358,59 @@ class CostItemDAO:
                 totals[cat] += amount
         grand_total = sum(totals.values())
         return result, totals, grand_total
+
+
+class DocumentDAO:
+    TYPES = ['现场签证单', '复工令', '监理通知', '业主指令']
+
+    @staticmethod
+    def create(data):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO documents (event_id, doc_type, doc_no, file_path, remark, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (data['event_id'], data['doc_type'], data.get('doc_no', ''),
+              data.get('file_path', ''), data.get('remark', ''), _now()))
+        conn.commit()
+        did = cursor.lastrowid
+        conn.close()
+        return did
+
+    @staticmethod
+    def update(did, data):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE documents SET doc_type=?, doc_no=?, file_path=?, remark=?
+            WHERE id=?
+        ''', (data['doc_type'], data.get('doc_no', ''), data.get('file_path', ''),
+              data.get('remark', ''), did))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def get_by_event(event_id):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM documents WHERE event_id=? ORDER BY doc_type, id', (event_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_by_event_and_type(event_id, doc_type):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM documents WHERE event_id=? AND doc_type=? ORDER BY id', (event_id, doc_type))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def delete(did):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM documents WHERE id=?', (did,))
+        conn.commit()
+        conn.close()

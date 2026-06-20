@@ -99,5 +99,18 @@ def init_database():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            doc_type TEXT NOT NULL,
+            doc_no TEXT,
+            file_path TEXT,
+            remark TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        )
+    ''')
+
     conn.commit()
     conn.close()

@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from PyQt5.QtWidgets import QFileDialog
-from app.db.dao import CostItemDAO, EventDAO
+from app.db.dao import CostItemDAO, EventDAO, DocumentDAO
 
 
 def export_summary(event_id):
@@ -132,17 +132,48 @@ def export_summary(event_id):
     c.alignment = left
     row += 2
 
+    doc_status_title = '支撑材料档案归档情况'
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+    c = ws.cell(row=row, column=1, value=doc_status_title)
+    c.font = header_font
+    c.fill = header_fill
+    for col in range(1, 8):
+        ws.cell(row=row, column=col).border = border
+        ws.cell(row=row, column=col).fill = header_fill
+    row += 1
+
+    for t in DocumentDAO.TYPES:
+        docs = DocumentDAO.get_by_event_and_type(event_id, t)
+        if docs:
+            status_text = f'✔ {t}：已归档 {len(docs)} 份'
+            font_color = '008000'
+        else:
+            status_text = f'✘ {t}：未归档（待补）'
+            font_color = 'C00000'
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        c = ws.cell(row=row, column=1, value=status_text)
+        c.font = Font(name='微软雅黑', size=10, color=font_color)
+        for col in range(1, 8):
+            ws.cell(row=row, column=col).border = border
+        row += 1
+
+        for d in docs:
+            doc_info = f"   编号：{d.get('doc_no', '')}    文件：{d.get('file_path', '')}    备注：{d.get('remark', '')}"
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+            c = ws.cell(row=row, column=1, value=doc_info)
+            c.font = Font(name='微软雅黑', size=9, color='555555')
+            for col in range(1, 8):
+                ws.cell(row=row, column=col).border = border
+            row += 1
+
     missing = EventDAO.get_missing_docs(event_id)
     if missing:
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
-        c = ws.cell(row=row, column=1, value='⚠ 支撑材料待补：' + '、'.join(missing))
+        c = ws.cell(row=row, column=1, value='⚠ 待补材料：' + '、'.join([m for m in missing if m not in DocumentDAO.TYPES]))
         c.font = Font(name='微软雅黑', size=10, color='C00000')
         row += 1
-    else:
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
-        c = ws.cell(row=row, column=1, value='✔ 支撑材料齐全，可提交确认')
-        c.font = Font(name='微软雅黑', size=10, color='008000')
-        row += 1
+
+    row += 1
 
     row += 1
     sign = ['商务经理签字：______________', '项目经理签字：______________', f"日期：{datetime.now().strftime('%Y年%m月%d日')}"]

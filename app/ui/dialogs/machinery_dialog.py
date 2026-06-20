@@ -101,12 +101,29 @@ class MachineryDialog(QDialog):
 
     def _on_item_changed(self, item):
         row = item.row()
+        if self.table.item(row, 0) is None:
+            return
         mid = int(self.table.item(row, 0).text())
+
+        qty_text = self.table.item(row, 4).text().strip()
+        try:
+            quantity = float(qty_text) if qty_text else 0.0
+        except ValueError:
+            QMessageBox.warning(self, '输入有误', '数量必须是数字，请重新输入！\n已恢复为原来的数值。')
+            self.table.blockSignals(True)
+            records = MachineryDAO.get_by_event(self.event_id)
+            for r in records:
+                if r['id'] == mid:
+                    self.table.item(row, 4).setText(str(r.get('quantity', 0)))
+                    break
+            self.table.blockSignals(False)
+            return
+
         data = {
             'record_date': self.table.item(row, 1).text(),
             'machine_name': self.table.item(row, 2).text(),
             'specification': self.table.item(row, 3).text(),
-            'quantity': float(self.table.item(row, 4).text() or 0),
+            'quantity': quantity,
             'unit': self.table.item(row, 5).text(),
             'remark': self.table.item(row, 6).text(),
         }
